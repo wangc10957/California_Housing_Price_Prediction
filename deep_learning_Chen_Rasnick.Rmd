@@ -1,0 +1,163 @@
+---
+title: "Deep Learning Project - California Housing Data"
+author: "Chen Wang & Rebecca Rasnick"
+date: "7/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE)
+```
+
+Loading the California housing dataset
+
+```{r}
+library(keras) # Loading the package needed for deep learning
+setwd("C://Users//cwang//Desktop//BIOS691 - Deep Learning R")
+#setwd("~/VCU/First Year/Summer 2020/Deep Learning with R")
+data=read.csv("housing.csv")
+```
+
+Preparing the dataset
+
+```{r}
+str(data)
+myPredictorvar<-c("longitude", "latitude", "total_rooms","total_bedrooms","population","households","median_income") # Predictor values
+data=data[,-10] # getting rid of the categorical variable
+head(data) # looking at the first few observations of the edited data set
+data=na.omit(data) # Removing missing values for normalization
+```
+
+Getting a subset of data
+
+```{r}
+library(data.table)
+set.seed(10) # seed for reproducibility
+data <- data.table(data) # making the data into a data frame
+Data_sub=data[sample(.N, 1500)] # sampling from the data set
+train_data<-as.matrix(Data_sub[1:1000,-"median_house_value"]) # making train data with only predictor variables
+train_targets<-as.matrix(data[1:1000,"median_house_value"]) # training data response variable
+test_data<-as.matrix(Data_sub[1001:1500,-"median_house_value"]) # Testing data
+test_targets<-as.matrix(data[1001:1500,"median_house_value"])
+```
+
+Normalizing the subsets
+
+```{r}
+mean<-apply(train_data, 2, mean)
+std<- apply(train_data, 2, sd)
+
+train_data<-scale(train_data, center=mean, scale=std) # Scale training and testing data using the mean and std from the training data
+test_data<-scale(test_data, center=mean, scale=std)
+```
+
+Building the network, with 2 hidden layers, each with 50 units.
+
+```{r}
+build_model <- function()
+{
+  model <- keras_model_sequential() %>%
+  layer_dense(units=50, activation="relu", input_shape = dim(train_data)[[2]]) %>%
+  layer_dense(units=50, activation="relu") %>%
+  layer_dense(units=1)
+  
+  model %>% compile(
+    optimizer="rmsprop",
+    loss="mse", # mean squared error loss function
+    metrics=c("mae")
+  )
+}
+```
+
+Validating the approach using K-fold validation
+
+```{r}
+#K-fold validation
+k=4 # number of folds
+indices <- sample(1:nrow(train_data))
+folds <- cut(indices, breaks = k, labels = FALSE)
+
+num_epochs <- 100
+all_scores <- c()
+
+for (i in 1:k) {
+  cat("processing fold #", i, "\n")
+  
+  # Prepare the validation data: data from partition # k
+  val_indices <- which(folds == i, arr.ind = TRUE)
+  val_data <- train_data[val_indices,]
+  val_targets <- train_targets[val_indices]
+  
+  # Prepare the training data: data from all other partitions
+  partial_train_data <- train_data[-val_indices,]
+  partial_train_targets <- train_targets[-val_indices]
+  
+  # Build the Keras model (already compiled)
+  model <- build_model()
+  
+  # Trains the model(in silent mode, verbose=0)
+  model %>% fit(partial_train_data, partial_train_targets,epochs = num_epochs, batch_size = 1, verbose = 0)
+  
+  #Evaluates the model on the validation data
+  results <- model %>% evaluate(val_data, val_targets, verbose = 0)
+  all_scores <- c(all_scores, results["mae"])
+}
+all_scores
+mean(all_scores)
+```
+
+Some memory clean-up
+
+```{r}
+k_clear_session()
+```
+
+Saving the validation logs at each fold
+Training the network a bit longer: 300 epochs
+
+```{r}
+num_epochs <- 300
+all_mae_histories <- NULL #Vector to store the mae values
+for (i in 1:k) {
+  cat("processing fold #", i, "\n")
+  
+  # Prepare the validation data: data from partition # k
+  val_indices <- which(folds == i, arr.ind = TRUE)
+  val_data <- train_data[val_indices,]
+  val_targets <- train_targets[val_indices]
+  
+  # Prepare the training data: data from all other partitions
+  partial_train_data <- train_data[-val_indices,]
+  partial_train_targets <- train_targets[-val_indices]
+  
+  # Build the Keras model (already compiled)
+  model <- build_model()
+  
+  # Train the model (in silent mode, verbose=0)
+  history <- model %>% fit(
+    partial_train_data, partial_train_targets,
+    validation_data = list(val_data, val_targets),
+    epochs = num_epochs, batch_size = 1, verbose = 0
+  )
+  mae_history <- history$metrics$val_mae
+  all_mae_histories <- rbind(all_mae_histories, mae_history)
+}
+```
+
+Computing the average of the per-epoch MAE scores for all folds
+
+```{r}
+average_mae_history <- data.frame(
+  epoch = seq(1:ncol(all_mae_histories)),
+  validation_mae = apply(all_mae_histories, 2, mean)
+)
+```
+
+Plotting validation scores
+
+```{r}
+library(ggplot2)
+ggplot(average_mae_history, aes(x = epoch, y = validation_mae)) + geom_smooth()
+```
+
+From the plot, we can see that the validation MAE stops improving significantly after 85 epochs.
